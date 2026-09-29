@@ -13,9 +13,11 @@ export function writeSignal(draft, context = {}) {
   const source = context.source || 'composer';
   const actor = context.actor || 'ui-user';
 
-  // --- 1. Re-validate on the server. Never trust the browser. ---
-  const validation = validateDraft(draft);
+  // Defensive: guard against null/undefined drafts
+  const safeDraft = draft && typeof draft === 'object' ? draft : {};
 
+  // --- 1. Re-validate on the server. Never trust the browser. ---
+  const validation = validateDraft(safeDraft);
   if (!validation.ok) {
     logAudit({
       action: 'confirm_signal',

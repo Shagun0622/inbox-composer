@@ -6,15 +6,30 @@ import {
   fallbacks,
 } from '../fixture-loader.js';
 
-/**
- * Validate a parsed draft against the fixture config + existing ledger.
- * Returns { ok, enriched, verdict, issues }
- */
 export function validateDraft(draft) {
   const issues = [];
 
-  // 1. Enrich participants: known / internal / unverified
-  const enrichedParticipants = draft.participants.map(p => {
+  // Defensive normalization — never crash on missing fields
+  const safeDraft = {
+    id: draft?.id ?? null,
+    match_key: draft?.match_key ?? '',
+    type: draft?.type ?? 'slack_thread',
+    date: draft?.date ?? null,
+    time: draft?.time ?? null,
+    title: draft?.title ?? '',
+    detected_on: draft?.detected_on ?? new Date().toISOString().slice(0, 10),
+    participants: Array.isArray(draft?.participants) ? draft.participants : [],
+    attendees: Array.isArray(draft?.attendees) ? draft.attendees : [],
+    projects: Array.isArray(draft?.projects) ? draft.projects : [],
+    summary: draft?.summary ?? null,
+    expected_files: Array.isArray(draft?.expected_files) ? draft.expected_files : [],
+    notes: draft?.notes ?? null,
+    status: draft?.status ?? {},
+    sources: draft?.sources ?? {},
+  };
+
+  // 1. Enrich participants
+  const enrichedParticipants = safeDraft.participants.map(p => {
     const status = classifyParticipant(p.email);
     if (status === 'unverified') {
       issues.push({
@@ -27,8 +42,8 @@ export function validateDraft(draft) {
     return { ...p, verified: status };
   });
 
-  // 2. Assign a project
-  const assignedProjects = assignProjects(draft, enrichedParticipants);
+  // 2. Assign project
+  const assignedProjects = assignProjects(safeDraft, enrichedParticipants);
   if (
     assignedProjects.length === 0 ||
     assignedProjects[0] === fallbacks.unrouted
@@ -41,8 +56,8 @@ export function validateDraft(draft) {
     });
   }
 
-  // 3. Check identity validity
-  if (!draft.id) {
+  // 3. Identity validity
+  if (!safeDraft.id) {
     issues.push({
       level: 'error',
       code: 'MISSING_ID',
@@ -51,26 +66,26 @@ export function validateDraft(draft) {
     });
   }
 
-  // 4. Duplicate detection
-  if (draft.id) {
+  // 4. Exact duplicate
+  if (safeDraft.id) {
     const existing = db
       .prepare('SELECT id, title FROM signals WHERE id = ?')
-      .get(draft.id);
+      .get(safeDraft.id);
     if (existing) {
       issues.push({
         level: 'error',
         code: 'DUPLICATE_ID',
-        message: `Signal with id "${draft.id}" already exists ("${existing.title}").`,
+        message: `Signal with id "${safeDraft.id}" already exists ("${existing.title}").`,
         field: 'id',
       });
     }
   }
 
-  // Near-duplicate: same match_key on a different date
-  if (draft.match_key) {
+  // 5. Near duplicate
+  if (safeDraft.match_key && safeDraft.date) {
     const nearDup = db
       .prepare('SELECT id, title, date FROM signals WHERE match_key = ? AND date != ?')
-      .get(draft.match_key, draft.date);
+      .get(safeDraft.match_key, safeDraft.date);
     if (nearDup) {
       issues.push({
         level: 'warn',
@@ -81,14 +96,13 @@ export function validateDraft(draft) {
     }
   }
 
-  // 5. Compute verdict
+  // 6. Verdict
   const hasError = issues.some(i => i.level === 'error');
   const hasWarn = issues.some(i => i.level === 'warn');
   const verdict = hasError ? 'blocked' : hasWarn ? 'needs_review' : 'ready';
 
-  // 6. Build the enriched draft (ready to show in preview)
   const enriched = {
-    ...draft,
+    ...safeDraft,
     participants: enrichedParticipants,
     attendees: enrichedParticipants.map(p => p.email),
     projects: assignedProjects,
@@ -102,34 +116,24 @@ export function validateDraft(draft) {
   };
 }
 
-// ---- Helpers ----
-
 function classifyParticipant(email) {
   const lower = email.toLowerCase();
   const domain = lower.split('@')[1] || '';
-
-  // Internal?
   if (internalDomains.includes(domain)) return 'internal';
-
-  // Known client contact?
   for (const project of projects) {
     if (project.emails.includes(lower)) return 'known';
   }
-
-  // Known domain?
   for (const project of projects) {
     if (project.domains.includes(domain)) return 'known';
   }
-
   return 'unverified';
 }
 
 function assignProjects(draft, participants) {
   const assigned = new Set();
 
-  // a) Explicit routing hints first (they override keywords)
   for (const hint of routingHints) {
-    if (!projectExists(hint.project)) continue; // silently drop bad hints
+    if (!projectExists(hint.project)) continue;
     if (hint.type === 'keyword' && draft.title.toLowerCase().includes(hint.match.toLowerCase())) {
       assigned.add(hint.project);
     }
@@ -140,7 +144,6 @@ function assignProjects(draft, participants) {
     }
   }
 
-  // b) Keyword match on title
   const titleLower = (draft.title || '').toLowerCase();
   for (const project of projects) {
     for (const kw of project.keywords) {
@@ -150,7 +153,6 @@ function assignProjects(draft, participants) {
     }
   }
 
-  // c) Email/domain match from participants
   for (const project of projects) {
     for (const p of participants) {
       if (project.emails.includes(p.email)) assigned.add(project.id);
@@ -159,11 +161,7 @@ function assignProjects(draft, participants) {
     }
   }
 
-  // d) Fallback
-  if (assigned.size === 0) {
-    return [fallbacks.unrouted];
-  }
-
+  if (assigned.size === 0) return [fallbacks.unrouted];
   return Array.from(assigned);
 }
 
