@@ -40,15 +40,16 @@ db.exec(`
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  CREATE TABLE IF NOT EXISTS audit_log (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    action      TEXT NOT NULL,       -- 'confirm_signal' | 'reject_signal' | 'duplicate_blocked'
-    signal_id   TEXT,                -- the id we tried to write (or null)
-    payload     TEXT,                -- JSON snapshot of what was submitted
-    result      TEXT NOT NULL,       -- 'success' | 'error' | 'blocked'
-    message     TEXT,                -- human-readable reason
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+    CREATE TABLE IF NOT EXISTS audit_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  action      TEXT NOT NULL,
+  signal_id   TEXT,
+  payload     TEXT,
+  result      TEXT NOT NULL,
+  message     TEXT,
+  actor       TEXT NOT NULL DEFAULT 'system',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
   CREATE INDEX IF NOT EXISTS idx_signals_match_key ON signals(match_key);
   CREATE INDEX IF NOT EXISTS idx_signals_date ON signals(date);
