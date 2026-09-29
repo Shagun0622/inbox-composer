@@ -1,0 +1,14 @@
+{
+  "name": "inbox-composer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chat-thread composer for Supanova Inbox.",
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
