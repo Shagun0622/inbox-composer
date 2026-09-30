@@ -1,59 +1,109 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Where the SQLite file lives: ../data/inbox.db
 const DATA_DIR = path.resolve(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'inbox.db');
 
-// Make sure data/ exists
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// Open (or create) the database
-const db = new Database(DB_PATH);
+const rawDb = new DatabaseSync(DB_PATH);
 
-// Performance + safety pragmas
-db.pragma('journal_mode = WAL');   // better concurrency
-db.pragma('foreign_keys = ON');    // enforce FK constraints
+rawDb.exec('PRAGMA journal_mode = WAL');
+rawDb.exec('PRAGMA foreign_keys = ON');
 
-// ---- Schema ----
-db.exec(`
+rawDb.exec(`
   CREATE TABLE IF NOT EXISTS signals (
-    id            TEXT PRIMARY KEY,          -- {date}_{match_key}
-    match_key     TEXT NOT NULL,
-    type          TEXT NOT NULL,             -- meeting | slack_thread | email_thread
-    date          TEXT NOT NULL,
-    time          TEXT,
-    title         TEXT NOT NULL,
-    detected_on   TEXT NOT NULL,
-    attendees     TEXT NOT NULL,             -- JSON array (stored as text)
-    projects      TEXT NOT NULL,             -- JSON array
-    summary       TEXT,
+    id             TEXT PRIMARY KEY,
+    match_key      TEXT NOT NULL,
+    type           TEXT NOT NULL,
+    date           TEXT NOT NULL,
+    time           TEXT,
+    title          TEXT NOT NULL,
+    detected_on    TEXT NOT NULL,
+    attendees      TEXT NOT NULL,
+    projects       TEXT NOT NULL,
+    summary        TEXT,
     expected_files TEXT NOT NULL DEFAULT '[]',
-    notes         TEXT,
-    status        TEXT NOT NULL DEFAULT '{}',-- JSON object
-    sources       TEXT NOT NULL DEFAULT '{}',-- JSON object
-    source        TEXT NOT NULL DEFAULT 'composer', -- where it came from
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    notes          TEXT,
+    status         TEXT NOT NULL DEFAULT '{}',
+    sources        TEXT NOT NULL DEFAULT '{}',
+    source         TEXT NOT NULL DEFAULT 'composer',
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-    CREATE TABLE IF NOT EXISTS audit_log (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  action      TEXT NOT NULL,
-  signal_id   TEXT,
-  payload     TEXT,
-  result      TEXT NOT NULL,
-  message     TEXT,
-  actor       TEXT NOT NULL DEFAULT 'system',
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    action      TEXT NOT NULL,
+    signal_id   TEXT,
+    payload     TEXT,
+    result      TEXT NOT NULL,
+    message     TEXT,
+    actor       TEXT NOT NULL DEFAULT 'system',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 
   CREATE INDEX IF NOT EXISTS idx_signals_match_key ON signals(match_key);
   CREATE INDEX IF NOT EXISTS idx_signals_date ON signals(date);
   CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 `);
 
-export default db;
+// ---- Compatibility shim ----
+// Existing code uses better-sqlite3's API:
+//   db.prepare(sql).run(params)  -> { changes, lastInsertRowid }
+//   db.prepare(sql).get(params)  -> row | undefined
+//   db.prepare(sql).all(params)  -> row[]
+//   db.transaction(fn)           -> returns a function that runs fn in a transaction
+// node:sqlite uses @name -> :name for named params. This shim bridges both.
+
+const _prepare = rawDb.prepare.bind(rawDb);
+
+rawDb.prepare = function (sql) {
+  // Rewrite @name to :name for node:sqlite compatibility
+  const rewritten = sql.replace(/@([a-zA-Z_][a-zA-Z0-9_]*)/g, ':$1');
+  const stmt = _prepare(rewritten);
+
+  function callWith(method, args) {
+    const [first] = args;
+    if (
+      first !== undefined &&
+      typeof first === 'object' &&
+      first !== null &&
+      !Array.isArray(first)
+    ) {
+      // Named params object
+      return stmt[method](first);
+    }
+    return stmt[method](...args);
+  }
+
+  return {
+    run: (...args) => {
+      const res = callWith('run', args);
+      return {
+        changes: Number(res.changes ?? 0),
+        lastInsertRowid: Number(res.lastInsertRowid ?? 0),
+      };
+    },
+    get: (...args) => callWith('get', args),
+    all: (...args) => callWith('all', args),
+  };
+};
+
+rawDb.transaction = function (fn) {
+  return (...args) => {
+    rawDb.exec('BEGIN');
+    try {
+      const out = fn(...args);
+      rawDb.exec('COMMIT');
+      return out;
+    } catch (err) {
+      rawDb.exec('ROLLBACK');
+      throw err;
+    }
+  };
+};
+
+export default rawDb;
