@@ -4,6 +4,7 @@ import { signals, projects, runLog } from './fixture-loader.js';
 import parseRoutes from './routes/parse.js';
 import validateRoutes from './routes/validate.js';
 import confirmRoutes from './routes/confirm.js';
+import signalRoutes from './routes/signals.js';
 
 const app = express();
 const PORT = 3001;
@@ -16,7 +17,7 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, message: 'Server is running' });
 });
 
-// Fixture summary (existing)
+// Fixture summary
 app.get('/api/fixture/summary', (req, res) => {
   res.json({
     ok: true,
@@ -33,16 +34,25 @@ app.get('/api/fixture/summary', (req, res) => {
 app.use('/api', parseRoutes);
 app.use('/api', validateRoutes);
 app.use('/api', confirmRoutes);
+app.use('/api', signalRoutes);
 
 // 404 for unknown API routes
 app.use('/api', (req, res) => {
-  res.status(404).json({ ok: false, error: 'NOT_FOUND', message: `No route for ${req.method} ${req.originalUrl}` });
+  res.status(404).json({
+    ok: false,
+    error: 'NOT_FOUND',
+    message: `No route for ${req.method} ${req.originalUrl}`,
+  });
 });
 
-// Global error handler — never leak stack traces
+// Global error handler
 app.use((err, req, res, next) => {
   console.error('[server] unhandled error:', err.message);
-  res.status(500).json({ ok: false, error: 'INTERNAL', message: 'Something went wrong on the server.' });
+  res.status(500).json({
+    ok: false,
+    error: 'INTERNAL',
+    message: 'Something went wrong on the server.',
+  });
 });
 
 app.listen(PORT, () => {

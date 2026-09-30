@@ -9,11 +9,10 @@
     "seed": "node seed.js"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
-    "cors": "^2.8.6",
-    "express": "^5.2.1"
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.0"
   }
 }
